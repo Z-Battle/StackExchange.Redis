@@ -6,8 +6,6 @@
     <AssemblyName>StackExchange.Redis.Tests</AssemblyName>
     <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <SignAssembly>true</SignAssembly>
-    <DebugType>full</DebugType>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
