@@ -1,4 +1,6 @@
-﻿using System.IO;
+﻿using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -117,16 +119,51 @@ namespace StackExchange.Redis.Tests
             }
             foreach (var config in slaveConfigs)
             {
-                foreach (var kvp in config) {
+                foreach (var kvp in config)
+                {
                     Log("{0}:{1}", kvp.Key, kvp.Value);
                 }
             }
         }
 
         [Fact]
-        public void SentinelFailoverTest()
+        public async Task SentinelFailoverTest()
         {
-            Server.SentinelFailover(ServiceName);
+            //  1/3: Get the master and slaves before requesting a failover
+            var masterPort = (await Server.SentinelMasterAsync(ServiceName).ForAwait()).FirstOrDefault(kvp => kvp.Key == @"port").Value;
+            var slavesPort = new HashSet<string>((await Server.SentinelSlavesAsync(ServiceName).ForAwait()).Select(kvps => kvps.FirstOrDefault(kvp => kvp.Key == @"port").Value));
+
+            //  2/3: Request Sentinel for a forced failover
+            await Server.SentinelFailoverAsync(ServiceName);
+
+            //  3/3: Get the new master and slaves
+            var masterPortAfterFailover = (await Server.SentinelMasterAsync(ServiceName).ForAwait()).FirstOrDefault(kvp => kvp.Key == @"port").Value;
+            for (int index = 0; index < 60 && masterPort == masterPortAfterFailover; index++)
+            {
+                await Task.Delay(250);
+                masterPortAfterFailover = (await Server.SentinelMasterAsync(ServiceName).ForAwait()).FirstOrDefault(kvp => kvp.Key == @"port").Value;
+            }
+            var slavesPortAfterFailover = new HashSet<string>((await Server.SentinelSlavesAsync(ServiceName).ForAwait()).Select(kvps => kvps.FirstOrDefault(kvp => kvp.Key == @"port").Value));
+
+            //  Show pre and post configuration
+            Log($"Master before failover: {masterPort}");
+            foreach (var slavePort in slavesPort)
+            {
+                Log($"- Slave before failover: {slavePort}");
+            }
+            Log($"Master after failover: {masterPortAfterFailover}");
+            foreach (var slavePortAfterFailover in slavesPortAfterFailover)
+            {
+                Log($"- Slave after failover: {slavePortAfterFailover}");
+            }
+
+            //  Assertions
+            Assert.True(!string.IsNullOrWhiteSpace(masterPort), @"Master port before failover cannot be empty.");
+            Assert.True(!string.IsNullOrWhiteSpace(masterPortAfterFailover), @"Master port after failover cannot be empty.");
+            Assert.True(masterPort != masterPortAfterFailover, $@"Master must have changed (port: {masterPort}).");
+            Assert.True(slavesPort.Count == slavesPortAfterFailover.Count, $@"Number of slaves must be equal after failover (before: {slavesPort.Count}, after: {slavesPortAfterFailover.Count}).");
+            Assert.True(slavesPortAfterFailover.Contains(masterPort), $@"The old master must be a slave after failover (master: {masterPort}, slaves: [{string.Join(", ", slavesPortAfterFailover)}]).");
+            Assert.True(slavesPort.Contains(masterPortAfterFailover), $@"The new master had to be a slave before failover (master: {masterPortAfterFailover}, slaves: [{string.Join(", ", slavesPort)}]).");
         }
     }
 }
