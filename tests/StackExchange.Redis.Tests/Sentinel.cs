@@ -179,6 +179,9 @@ namespace StackExchange.Redis.Tests
             var writableDatabase = sentinelSubscriber.GetDatabase(this.ServiceName, SentinelDatabaseType.Master);
             var readonlyDatabase = sentinelSubscriber.GetDatabase(this.ServiceName, SentinelDatabaseType.Slave);
 
+            //  Ensure that all operations (of other tests) are completed...
+            await Task.Delay(1000).ForAwait();
+
             //  2/4 Write an entry in master (writable database)
             var result = await writableDatabase.StringSetAsync(key, value).ForAwait();
 
@@ -202,6 +205,56 @@ namespace StackExchange.Redis.Tests
             Assert.True(result, "Cannot write in master database.");
             Assert.True(value == replica, "Cannot get the replica in slave database.");
             Assert.True(exception is RedisConnectionException, @"Can write in slave database.");
+        }
+
+        [Fact]
+        public async Task SentinelSubscriberSwitchMasterTest()
+        {
+            //  1/3 Get master and slave databases before failover
+            var configurationOptions = new ConfigurationOptions();
+            var sentinelSubscriber = await this.Conn.CreateSentinelSubscriberAsync(configurationOptions).ForAwait();
+            var writableDatabase = sentinelSubscriber.GetDatabase(this.ServiceName, SentinelDatabaseType.Master);
+            var readonlyDatabase = sentinelSubscriber.GetDatabase(this.ServiceName, SentinelDatabaseType.Slave);
+
+            //  Ensure that all operations (of other tests) are completed...
+            await Task.Delay(1000).ForAwait();
+
+            //  2/3 Request Sentinel for a forced failover
+            SentinelSwitchMasterEventArgs eventArgs = null;
+            sentinelSubscriber.SwitchMaster += (sender, e) => eventArgs = e;
+            await Server.SentinelFailoverAsync(ServiceName);
+            for (int index = 0; index < 60 && eventArgs == null; index++)
+            {
+                await Task.Delay(250);
+            }
+
+            //  3/3 Get master and slave databases after failover
+            var writableDatabaseAfterFailover = sentinelSubscriber.GetDatabase(this.ServiceName, SentinelDatabaseType.Master);
+            var readonlyDatabaseAfterFailover = sentinelSubscriber.GetDatabase(this.ServiceName, SentinelDatabaseType.Slave);
+
+            //  Get the ports of endpoints
+            var masterPort = writableDatabase.Multiplexer.GetEndPoints().Cast<IPEndPoint>().FirstOrDefault()?.Port ?? 0;
+            var slavesPort = readonlyDatabase.Multiplexer.GetEndPoints().Cast<IPEndPoint>().FirstOrDefault()?.Port ?? 0;
+
+            //  Show pre and post configuration
+            //Log($"Master before failover: {masterPort}");
+            //foreach (var slavePort in slavesPort)
+            //{
+            //    Log($"- Slave before failover: {slavePort}");
+            //}
+            //Log($"Master after failover: {masterPortAfterFailover}");
+            //foreach (var slavePortAfterFailover in slavesPortAfterFailover)
+            //{
+            //    Log($"- Slave after failover: {slavePortAfterFailover}");
+            //}
+
+            ////  Assertions
+            //Assert.True(!string.IsNullOrWhiteSpace(masterPort), @"Master port before failover cannot be empty.");
+            //Assert.True(!string.IsNullOrWhiteSpace(masterPortAfterFailover), @"Master port after failover cannot be empty.");
+            //Assert.True(masterPort != masterPortAfterFailover, $@"Master must have changed (port: {masterPort}).");
+            //Assert.True(slavesPort.Count == slavesPortAfterFailover.Count, $@"Number of slaves must be equal after failover (before: {slavesPort.Count}, after: {slavesPortAfterFailover.Count}).");
+            //Assert.True(slavesPortAfterFailover.Contains(masterPort), $@"The old master must be a slave after failover (master: {masterPort}, slaves: [{string.Join(", ", slavesPortAfterFailover)}]).");
+            //Assert.True(slavesPort.Contains(masterPortAfterFailover), $@"The new master had to be a slave before failover (master: {masterPortAfterFailover}, slaves: [{string.Join(", ", slavesPort)}]).");
         }
     }
 }
