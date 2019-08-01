@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -164,6 +165,43 @@ namespace StackExchange.Redis.Tests
             Assert.True(slavesPort.Count == slavesPortAfterFailover.Count, $@"Number of slaves must be equal after failover (before: {slavesPort.Count}, after: {slavesPortAfterFailover.Count}).");
             Assert.True(slavesPortAfterFailover.Contains(masterPort), $@"The old master must be a slave after failover (master: {masterPort}, slaves: [{string.Join(", ", slavesPortAfterFailover)}]).");
             Assert.True(slavesPort.Contains(masterPortAfterFailover), $@"The new master had to be a slave before failover (master: {masterPortAfterFailover}, slaves: [{string.Join(", ", slavesPort)}]).");
+        }
+
+        [Fact]
+        public async Task SentinelSubscriberTest()
+        {
+            var key = $"{DateTime.UtcNow.Ticks}-Key";
+            var value = $"{DateTime.UtcNow.Ticks}-Value";
+
+            //  1/4 Get master and slave databases
+            var configurationOptions = new ConfigurationOptions();
+            var sentinelSubscriber = await this.Conn.CreateSentinelSubscriberAsync(configurationOptions).ForAwait();
+            var writableDatabase = sentinelSubscriber.GetDatabase(this.ServiceName, SentinelDatabaseType.Master);
+            var readonlyDatabase = sentinelSubscriber.GetDatabase(this.ServiceName, SentinelDatabaseType.Slave);
+
+            //  2/4 Write an entry in master (writable database)
+            var result = await writableDatabase.StringSetAsync(key, value).ForAwait();
+
+            //  3/4 Read the entry from slaves
+            var replica = await readonlyDatabase.StringGetAsync(key).ForAwait();
+            for (int index = 0; index < 60 && replica.IsNullOrEmpty; index++)
+            {
+                await Task.Delay(250).ForAwait();
+                replica = await readonlyDatabase.StringGetAsync(key).ForAwait();
+            }
+
+            //  4/4 Try to write an entry in slaves (readonly database)
+            Exception exception = null;
+            try
+            {
+                await readonlyDatabase.StringSetAsync(key, value).ForAwait();
+            }
+            catch (Exception e) { exception = e; }
+
+            //  Assertions
+            Assert.True(result, "Cannot write in master database.");
+            Assert.True(value == replica, "Cannot get the replica in slave database.");
+            Assert.True(exception is RedisConnectionException, @"Can write in slave database.");
         }
     }
 }
